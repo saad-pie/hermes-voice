@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "server.js": {
+      "maxDuration": 800
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/server.js" }
+  ]
+}
