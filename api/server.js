@@ -64,7 +64,7 @@ async function dispatchGitHubWorkflow(taskDescription, targetLayer = "background
   }
 }
 
-// Create native HTTP Server instance
+// Native HTTP Server instance for serving frontend static files
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -100,7 +100,7 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-wss.on('connection', async (clientWs) => {
+wss.on('connection', (clientWs) => {
   console.log('[Gateway] Client connected');
 
   if (!GEMINI_API_KEY) {
@@ -108,6 +108,22 @@ wss.on('connection', async (clientWs) => {
     clientWs.close(4001, 'GEMINI_API_KEY missing');
     return;
   }
+
+  // Heartbeat ping interval to keep Vercel proxies from dropping the socket
+  let isAlive = true;
+  clientWs.on('pong', () => { isAlive = true; });
+
+  const pingInterval = setInterval(() => {
+    if (!isAlive) {
+      console.log('[Gateway] Client unresponsive, terminating...');
+      clientWs.terminate();
+      return;
+    }
+    isAlive = false;
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.ping();
+    }
+  }, 10000);
 
   const geminiWs = new WebSocket(GEMINI_WS_URL);
 
@@ -175,30 +191,34 @@ wss.on('connection', async (clientWs) => {
 
   clientWs.on('message', (message, isBinary) => {
     if (geminiWs.readyState === WebSocket.OPEN) {
-      if (isBinary) {
-        geminiWs.send(message, { binary: true });
-      } else {
-        geminiWs.send(message.toString());
-      }
+      geminiWs.send(message, { binary: isBinary });
     }
   });
 
+  const cleanup = () => {
+    clearInterval(pingInterval);
+    if (geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+  };
+
   clientWs.on('close', () => {
     console.log('[Gateway] Client disconnected');
-    if (geminiWs.readyState === WebSocket.OPEN) {
-      geminiWs.close();
-    }
+    cleanup();
   });
 
   geminiWs.on('close', () => {
     console.log('[Gateway] Gemini socket closed');
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.close();
-    }
+    cleanup();
+  });
+
+  clientWs.on('error', (err) => {
+    console.error('[Gateway] Client WS Error:', err.message);
+    cleanup();
   });
 
   geminiWs.on('error', (err) => {
     console.error('[Gateway] Gemini WS Error:', err.message);
+    cleanup();
   });
 });
 
