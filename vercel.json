@@ -1,17 +1,18 @@
 {
   "functions": {
     "api/server.js": {
+      "includeFiles": "index.html",
       "maxDuration": 60
     }
   },
   "rewrites": [
     {
       "source": "/ws/live",
-      "destination": "/api/server"
+      "destination": "/api/server.js"
     },
     {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": "/api/server.js"
     }
   ]
 }
