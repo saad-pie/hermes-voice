@@ -64,7 +64,7 @@ async function dispatchGitHubWorkflow(taskDescription, targetLayer = "background
   }
 }
 
-// Native HTTP Server instance for serving frontend static files
+// Native HTTP Server instance
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -109,13 +109,13 @@ wss.on('connection', (clientWs) => {
     return;
   }
 
-  // Heartbeat ping interval to keep Vercel proxies from dropping the socket
+  // Ping interval to keep Vercel proxy timeouts from closing the connection
   let isAlive = true;
   clientWs.on('pong', () => { isAlive = true; });
 
   const pingInterval = setInterval(() => {
     if (!isAlive) {
-      console.log('[Gateway] Client unresponsive, terminating...');
+      console.log('[Gateway] Client unresponsive, cleaning up...');
       clientWs.terminate();
       return;
     }
@@ -161,7 +161,6 @@ wss.on('connection', (clientWs) => {
             const layer = fc.args?.target_layer || 'background';
             
             console.log(`[Tool Call Detected] Dispatched task: "${taskDesc}"`);
-            
             dispatchGitHubWorkflow(taskDesc, layer);
 
             const toolAck = {
@@ -223,3 +222,4 @@ wss.on('connection', (clientWs) => {
 });
 
 export default server;
+    
