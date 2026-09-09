@@ -64,10 +64,11 @@ async function dispatchGitHubWorkflow(taskDescription, targetLayer = "background
   }
 }
 
-// Create HTTP Server serving the UI
+// Create native HTTP Server instance
 const server = http.createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html') {
-    // process.cwd() correctly points to the root directory on Vercel
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  if (url.pathname === '/' || url.pathname === '/index.html') {
     const filePath = path.join(process.cwd(), 'index.html');
     fs.readFile(filePath, (err, data) => {
       if (err) {
@@ -84,14 +85,13 @@ const server = http.createServer((req, res) => {
   }
 });
 
-// WebSocket Server for Voice Gateway
+// Attach WebSocket Server
 const wss = new WebSocketServer({ noServer: true });
 
-// Handle WebSocket HTTP upgrades
 server.on('upgrade', (request, socket, head) => {
-  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   
-  if (pathname === '/ws/live') {
+  if (url.pathname === '/ws/live') {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
@@ -114,7 +114,6 @@ wss.on('connection', async (clientWs) => {
   geminiWs.on('open', () => {
     console.log('[Gateway] Connected to Gemini Live API');
     
-    // Send Setup Message
     const setupMsg = {
       setup: {
         model: "models/gemini-2.0-flash-exp",
@@ -149,7 +148,6 @@ wss.on('connection', async (clientWs) => {
             
             dispatchGitHubWorkflow(taskDesc, layer);
 
-            // Acknowledge Tool Execution back to Gemini
             const toolAck = {
               toolResponse: {
                 functionResponses: [
@@ -204,5 +202,4 @@ wss.on('connection', async (clientWs) => {
   });
 });
 
-// Export default server for Vercel Serverless Function entrypoint
 export default server;
