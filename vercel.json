@@ -1,15 +1,14 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/server.js",
-      "use": "@vercel/node"
+  "functions": {
+    "api/server.js": {
+      "includeFiles": "index.html",
+      "maxDuration": 60
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "api/server.js"
+      "source": "/(.*)",
+      "destination": "/api/server"
     }
   ]
 }
