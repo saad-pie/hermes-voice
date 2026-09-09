@@ -1,4 +1,6 @@
-import { fileURLToPath } from 'url';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
 import WebSocket, { WebSocketServer } from 'ws';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -62,11 +64,145 @@ async function dispatchGitHubWorkflow(taskDescription, targetLayer = "background
   }
 }
 
-// Vercel Serverless Function Handler
-export default async function handler(req, res) {
-  if (req.method === 'GET' && req.url === '/api/health') {
-    return res.status(200).json({ status: "Hermes Gateway Active" });
+// Create HTTP Server serving the UI
+const server = http.createServer((req, res) => {
+  if (req.url === '/' || req.url === '/index.html') {
+    // process.cwd() correctly points to the root directory on Vercel
+    const filePath = path.join(process.cwd(), 'index.html');
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading index.html');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+});
+
+// WebSocket Server for Voice Gateway
+const wss = new WebSocketServer({ noServer: true });
+
+// Handle WebSocket HTTP upgrades
+server.on('upgrade', (request, socket, head) => {
+  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
+  
+  if (pathname === '/ws/live') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+wss.on('connection', async (clientWs) => {
+  console.log('[Gateway] Client connected');
+
+  if (!GEMINI_API_KEY) {
+    console.error('[Gateway] GEMINI_API_KEY is missing.');
+    clientWs.close(4001, 'GEMINI_API_KEY missing');
+    return;
   }
 
-  res.status(405).json({ error: "Method not allowed. Use WebSocket connection at /ws/live" });
-}
+  const geminiWs = new WebSocket(GEMINI_WS_URL);
+
+  geminiWs.on('open', () => {
+    console.log('[Gateway] Connected to Gemini Live API');
+    
+    // Send Setup Message
+    const setupMsg = {
+      setup: {
+        model: "models/gemini-2.0-flash-exp",
+        generationConfig: {
+          responseModalities: ["AUDIO", "TEXT"]
+        },
+        tools: [HERMES_TOOL_DECLARATION]
+      }
+    };
+    geminiWs.send(JSON.stringify(setupMsg));
+  });
+
+  geminiWs.on('message', async (data, isBinary) => {
+    if (isBinary) {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(data, { binary: true });
+      }
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(data.toString());
+      
+      if (parsed.toolCall) {
+        const calls = parsed.toolCall.functionCalls || [];
+        for (const fc of calls) {
+          if (fc.name === 'trigger_hermes_agent') {
+            const taskDesc = fc.args?.task_description || '';
+            const layer = fc.args?.target_layer || 'background';
+            
+            console.log(`[Tool Call Detected] Dispatched task: "${taskDesc}"`);
+            
+            dispatchGitHubWorkflow(taskDesc, layer);
+
+            // Acknowledge Tool Execution back to Gemini
+            const toolAck = {
+              toolResponse: {
+                functionResponses: [
+                  {
+                    id: fc.id,
+                    response: {
+                      output: { status: "Task dispatched successfully to GitHub Actions Hermes Worker." }
+                    }
+                  }
+                ]
+              }
+            };
+            geminiWs.send(JSON.stringify(toolAck));
+          }
+        }
+      }
+
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(data.toString());
+      }
+    } catch (err) {
+      console.error('[Gateway] Error parsing Gemini message:', err.message);
+    }
+  });
+
+  clientWs.on('message', (message, isBinary) => {
+    if (geminiWs.readyState === WebSocket.OPEN) {
+      if (isBinary) {
+        geminiWs.send(message, { binary: true });
+      } else {
+        geminiWs.send(message.toString());
+      }
+    }
+  });
+
+  clientWs.on('close', () => {
+    console.log('[Gateway] Client disconnected');
+    if (geminiWs.readyState === WebSocket.OPEN) {
+      geminiWs.close();
+    }
+  });
+
+  geminiWs.on('close', () => {
+    console.log('[Gateway] Gemini socket closed');
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.close();
+    }
+  });
+
+  geminiWs.on('error', (err) => {
+    console.error('[Gateway] Gemini WS Error:', err.message);
+  });
+});
+
+// Export default server for Vercel Serverless Function entrypoint
+export default server;
