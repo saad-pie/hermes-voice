@@ -4,12 +4,10 @@
   "type": "module",
   "main": "api/server.js",
   "scripts": {
-    "build": "echo 'No build step required for serverless functions'",
-    "start": "node api/server.js",
-    "dev": "node api/server.js"
+    "build": "echo 'No build required'",
+    "start": "node api/server.js"
   },
   "dependencies": {
-    "@vercel/functions": "^1.0.0",
     "ws": "^8.18.0"
   }
 }
