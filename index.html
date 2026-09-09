@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Hermes Voice OS</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; padding: 2rem; border-radius: 1rem; text-align: center; width: 90%; max-width: 450px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    .btn { background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; font-weight: bold; border-radius: 0.5rem; cursor: pointer; margin-top: 1rem; width: 100%; font-size: 1rem; }
+    .btn.active { background: #ef4444; }
+    .status { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
+    #logs { margin-top: 1.5rem; text-align: left; background: #020617; padding: 1rem; border-radius: 0.5rem; height: 160px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid #334155; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Hermes Voice Gateway</h2>
+    <p>Speak to Gemini Live. Actions automatically route to GitHub Actions workers.</p>
+    <button id="toggleBtn" class="btn">Start Voice Session</button>
+    <div id="status" class="status">Status: Disconnected</div>
+    <div id="logs"></div>
+  </div>
+
+  <script>
+    const toggleBtn = document.getElementById("toggleBtn");
+    const statusDiv = document.getElementById("status");
+    const logsDiv = document.getElementById("logs");
+
+    let ws = null;
+    let audioContext = null;
+    let processor = null;
+    let globalStream = null;
+    let isConnected = false;
+
+    function log(msg) {
+      const p = document.createElement("div");
+      p.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logsDiv.appendChild(p);
+      logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
+
+    toggleBtn.addEventListener("click", () => {
+      if (!isConnected) startSession();
+      else stopSession();
+    });
+
+    async function startSession() {
+      try {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
+
+        ws.onopen = async () => {
+          statusDiv.textContent = "Status: Connected";
+          toggleBtn.textContent = "Stop Voice Session";
+          toggleBtn.classList.add("active");
+          isConnected = true;
+          log("Connected to Gateway Worker");
+          await startMicrophone();
+        };
+
+        ws.onmessage = async (event) => {
+          if (typeof event.data === "string") {
+            const data = JSON.parse(event.data);
+            if (data.toolCall) {
+              const args = data.toolCall.functionCalls[0]?.args;
+              log(`🛠️ Task Dispatched: ${JSON.stringify(args)}`);
+            }
+          } else if (event.data instanceof Blob) {
+            const arrayBuffer = await event.data.arrayBuffer();
+            playAudioFrame(arrayBuffer);
+          }
+        };
+
+        ws.onclose = () => { stopSession(); };
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    async function startMicrophone() {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const source = audioContext.createMediaStreamSource(globalStream);
+      processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      processor.onaudioprocess = (e) => {
+        if (!isConnected || ws.readyState !== WebSocket.OPEN) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+        }
+        ws.send(pcm16.buffer);
+      };
+    }
+
+    function playAudioFrame(buffer) {
+      if (!audioContext) return;
+      const int16Array = new Int16Array(buffer);
+      const float32Array = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 0x7FFF;
+      }
+      const audioBuf = audioContext.createBuffer(1, float32Array.length, 16000);
+      audioBuf.getChannelData(0).set(float32Array);
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuf;
+      source.connect(audioContext.destination);
+      source.start();
+    }
+
+    function stopSession() {
+      isConnected = false;
+      if (processor) processor.disconnect();
+      if (globalStream) globalStream.getTracks().forEach(track => track.stop());
+      if (ws) ws.close();
+      statusDiv.textContent = "Status: Disconnected";
+      toggleBtn.textContent = "Start Voice Session";
+      toggleBtn.classList.remove("active");
+      log("Session stopped.");
+    }
+  </script>
+</body>
+</html>
